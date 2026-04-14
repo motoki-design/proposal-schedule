@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>プロポーザル スケジュール管理｜エブリプラン</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Meiryo', 'Yu Gothic UI', 'Hiragino Sans', sans-serif;
+      background: #F0F2F5;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    /* ── ヘッダー ── */
+    .header {
+      background: #1A237E;
+      color: #fff;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .header h1 { font-size: 16px; font-weight: bold; letter-spacing: 0.05em; }
+    .header-right { font-size: 11px; opacity: 0.75; text-align: right; line-height: 1.6; }
+
+    /* ── コントロールバー ── */
+    .controls {
+      background: #fff;
+      border-bottom: 1px solid #DDE;
+      padding: 10px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .controls label { font-size: 12px; color: #555; white-space: nowrap; }
+    .controls input[type="date"] {
+      font-size: 12px; padding: 4px 8px;
+      border: 1px solid #CCC; border-radius: 4px;
+    }
+    .btn {
+      padding: 5px 14px;
+      background: #1A237E; color: #fff;
+      border: none; border-radius: 4px;
+      cursor: pointer; font-size: 12px;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #283593; }
+    .status-msg { font-size: 12px; color: #777; margin-left: 4px; }
+
+    /* ── 凡例 ── */
+    .legend-bar {
+      background: #fff;
+      border-bottom: 1px solid #DDE;
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: #444;
+    }
+    .legend-swatch {
+      width: 14px; height: 14px;
+      border-radius: 3px; flex-shrink: 0;
+    }
+    .legend-sep { color: #CCC; }
+
+    /* ── ガントエリア ── */
+    .gantt-wrapper {
+      padding: 20px 24px;
+      overflow-x: auto;
+    }
+    .gantt-svg {
+      display: block;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+
+    /* ── エラー・空状態 ── */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+      font-size: 14px;
+    }
+
+    /* ── ツールチップ ── */
+    .tooltip {
+      position: fixed;
+      background: rgba(20,20,40,0.92);
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.7;
+      pointer-events: none;
+      display: none;
+      z-index: 200;
+      max-width: 320px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .tooltip strong { font-size: 13px; display: block; margin-bottom: 4px; }
+    .tooltip .tt-row { display: flex; gap: 8px; }
+    .tooltip .tt-label { color: #AAB; min-width: 72px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>プロポーザル スケジュール管理</h1>
+  <div class="header-right">
+    <div id="lastUpdated"></div>
+    <div>エブリプラン 事業創発室</div>
+  </div>
+</div>
+
+<div class="controls">
+  <label>表示期間：</label>
+  <input type="date" id="startDate">
+  <span style="font-size:12px;color:#888">〜</span>
+  <input type="date" id="endDate">
+  <button class="btn" onclick="reload()">↺ 更新</button>
+  <span class="status-msg" id="statusMsg"></span>
+</div>
+
+<div class="legend-bar" id="legendBar"></div>
+
+<div class="gantt-wrapper">
+  <svg id="ganttSvg" class="gantt-svg"></svg>
+  <div id="emptyState" class="empty-state" style="display:none">
+    データがありません。スプレッドシートのURLを設定してください。
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════╗
+// ║  設定（ここだけ変更すればOK）                              ║
+// ╚══════════════════════════════════════════════════════════╝
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQTxwDVTFScfj8SLaF8Qcy2U6_lT9PdiQchTwO6jeiiFuXRrgNrpZOKRxDaYvuAXuadTN2aM-03c-OY/pub?gid=0&single=true&output=csv';
+//  ↑ GoogleスプレッドシートのCSV公開URLをここに貼り付ける
+
+// ────────────────────────────────────────────────────────────
+// フェーズ定義
+const PHASES = {
+  '情報収集中':   { color: '#9E9E9E', light: '#F5F5F5' },
+  '企画提案中':   { color: '#2196F3', light: '#E3F2FD' },
+  '提案中':       { color: '#FF9800', light: '#FFF3E0' },
+  '完了（受注）': { color: '#4CAF50', light: '#E8F5E9' },
+  '完了（不受注）':{ color: '#EF9A9A', light: '#FFEBEE' },
+};
+
+// マイルストーン定義（列名 → 表示ラベル・形状）
+const MILESTONES = [
+  { col: '公募開始', label: '公募', shape: 'triangle' },
+  { col: '質問締切', label: '質問', shape: 'diamond'  },
+  { col: '参加表明', label: '参加', shape: 'diamond'  },
+  { col: '企画提出', label: '提出', shape: 'diamond'  },
+  { col: 'プレゼン',  label: 'PL',   shape: 'star'    },
+];
+
+// レイアウト定数
+const L = {
+  INFO_W:   300,   // 左情報パネル幅
+  PAD_L:    12,    // チャートエリア左パディング
+  PAD_R:    24,    // チャートエリア右パディング
+  ROW_H:    52,    // 1行の高さ
+  HEAD_H:   44,    // ヘッダー行高さ
+  PPD:      16,    // pixels per day（1日あたりのピクセル数）
+  BAR_H:    14,    // バーの高さ
+  MS_SIZE:  7,     // マイルストーンサイズ
+};
+
+// ────────────────────────────────────────────────────────────
+let rows = [];
+
+// 日付パース
+function pd(v) {
+  if (!v || v === '') return null;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+
+function fmtMD(d) {
+  return d ? `${d.getMonth()+1}/${d.getDate()}` : '';
+}
+function fmtFull(d) {
+  return d ? `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}` : '';
+}
+
+// X座標計算
+function toX(date, origin) {
+  return L.INFO_W + L.PAD_L + ((date - origin) / 86400000) * L.PPD;
+}
+
+// ────────────────────────────────────────────────────────────
+// データ読み込み
+async function loadSheet() {
+  return new Promise((resolve, reject) => {
+    Papa.parse(SHEET_CSV_URL, {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete: r => resolve(r.data),
+      error: reject,
+    });
+  });
+}
+
+async function reload() {
+  const msg = document.getElementById('statusMsg');
+  msg.textContent = '読み込み中…';
+
+  try {
+    const data = await loadSheet();
+    rows = data
+      .filter(r => r['案件名'] && r['案件名'].trim())
+      .map(r => {
+        const dates = {};
+        MILESTONES.forEach(m => { dates[m.col] = pd(r[m.col]); });
+        return { ...r, dates };
+      });
+
+    document.getElementById('lastUpdated').textContent =
+      `最終更新：${new Date().toLocaleString('ja-JP', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
+    msg.textContent = `${rows.length} 件`;
+    render();
+  } catch (e) {
+    msg.textContent = 'エラー：データを読み込めませんでした';
+    console.error(e);
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// 描画
+function render() {
+  const svg = document.getElementById('ganttSvg');
+  const empty = document.getElementById('emptyState');
+
+  if (rows.length === 0) {
+    svg.style.display = 'none';
+    empty.style.display = 'block';
+    return;
+  }
+  svg.style.display = 'block';
+  empty.style.display = 'none';
+
+  // 日付範囲
+  const si = document.getElementById('startDate').value;
+  const ei = document.getElementById('endDate').value;
+  let origin = si ? new Date(si) : null;
+  let end    = ei ? new Date(ei) : null;
+
+  if (!origin || !end) {
+    const all = [];
+    rows.forEach(r => Object.values(r.dates).forEach(d => { if (d) all.push(d); }));
+    if (all.length === 0) return;
+    if (!origin) { origin = new Date(Math.min(...all)); origin.setDate(origin.getDate() - 7); }
+    if (!end)    { end    = new Date(Math.max(...all)); end.setDate(end.getDate() + 30);    }
+  }
+
+  const totalDays = (end - origin) / 86400000;
+  const chartW    = Math.ceil(totalDays * L.PPD);
+  const totalW    = L.INFO_W + L.PAD_L + chartW + L.PAD_R;
+  const totalH    = L.HEAD_H + rows.length * L.ROW_H + 8;
+
+  svg.setAttribute('width',   totalW);
+  svg.setAttribute('height',  totalH);
+  svg.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+
+  let h = '';
+
+  // 背景
+  h += `<rect width="${totalW}" height="${totalH}" fill="#fff"/>`;
+
+  // グリッド・ヘッダー
+  h += drawGrid(origin, end, totalDays, chartW, totalH, totalW);
+
+  // 行
+  rows.forEach((row, i) => {
+    h += drawRow(row, i, origin, end, totalDays, chartW, totalW);
+  });
+
+  // 今日線
+  const today = new Date();
+  if (today >= origin && today <= end) {
+    const tx = toX(today, origin);
+    h += `<line x1="${tx}" y1="0" x2="${tx}" y2="${totalH}"
+            stroke="#E53935" stroke-width="1.5" stroke-dasharray="5,3" opacity="0.8"/>`;
+    h += `<text x="${tx+3}" y="${L.HEAD_H - 6}"
+            fill="#E53935" font-size="10" font-family="Meiryo">今日</text>`;
+  }
+
+  // 左パネル区切り線
+  h += `<line x1="${L.INFO_W}" y1="0" x2="${L.INFO_W}" y2="${totalH}"
+          stroke="#C5CAE9" stroke-width="1"/>`;
+
+  svg.innerHTML = h;
+
+  attachTooltips();
+  drawLegend();
+}
+
+// ────────────────────────────────────────────────────────────
+// グリッド・時間軸ヘッダー
+function drawGrid(origin, end, totalDays, chartW, totalH, totalW) {
+  let h = '';
+
+  // ヘッダー背景
+  h += `<rect x="0" y="0" width="${totalW}" height="${L.HEAD_H}" fill="#E8EAF6"/>`;
+
+  // 月グリッド
+  const cur = new Date(origin);
+  cur.setDate(1);
+  while (cur <= end) {
+    const x = toX(cur, origin);
+    if (x >= L.INFO_W) {
+      const lbl = `${cur.getFullYear()}年${cur.getMonth()+1}月`;
+      h += `<line x1="${x}" y1="0" x2="${x}" y2="${totalH}"
+              stroke="#C5CAE9" stroke-width="1" opacity="0.6"/>`;
+      h += `<text x="${x+5}" y="${L.HEAD_H/2+2}"
+              fill="#3949AB" font-size="11" font-family="Meiryo" font-weight="bold">${lbl}</text>`;
+    }
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  // 週グリッド + 日付ラベル
+  const wk = new Date(origin);
+  // 直近の月曜に揃える
+  const dow = wk.getDay();
+  wk.setDate(wk.getDate() + (dow === 1 ? 0 : dow === 0 ? 1 : 8 - dow));
+  while (wk <= end) {
+    const x = toX(wk, origin);
+    if (x >= L.INFO_W) {
+      h += `<line x1="${x}" y1="${L.HEAD_H}" x2="${x}" y2="${totalH}"
+              stroke="#E8EAF6" stroke-width="1"/>`;
+      h += `<text x="${x+2}" y="${L.HEAD_H-5}"
+              fill="#9FA8DA" font-size="9" font-family="Meiryo">${fmtMD(wk)}</text>`;
+    }
+    wk.setDate(wk.getDate() + 7);
+  }
+
+  // 左ヘッダーテキスト
+  h += `<text x="12" y="${L.HEAD_H/2+5}"
+          fill="#3949AB" font-size="12" font-family="Meiryo" font-weight="bold">案件名</text>`;
+  h += `<text x="${L.INFO_W - 58}" y="${L.HEAD_H/2+5}"
+          fill="#3949AB" font-size="12" font-family="Meiryo" font-weight="bold">担当</text>`;
+
+  return h;
+}
+
+// ────────────────────────────────────────────────────────────
+// 1行分の描画
+function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
+  let h = '';
+  const y    = L.HEAD_H + i * L.ROW_H;
+  const phase = row['フェーズ'] || '情報収集中';
+  const pc   = (PHASES[phase] || PHASES['情報収集中']);
+  const col  = pc.color;
+
+  // 交互背景
+  if (i % 2 === 1) {
+    h += `<rect x="0" y="${y}" width="${totalW}" height="${L.ROW_H}" fill="#FAFBFF"/>`;
+  }
+  // 下線
+  h += `<line x1="0" y1="${y+L.ROW_H}" x2="${totalW}" y2="${y+L.ROW_H}"
+          stroke="#E8EAF6" stroke-width="1"/>`;
+
+  // フェーズ帯（左端4px）
+  h += `<rect x="0" y="${y}" width="4" height="${L.ROW_H}" fill="${col}"/>`;
+
+  // ── 左情報パネル ──
+  const name = row['案件名'] || '';
+  const nameShort = name.length > 20 ? name.slice(0, 20) + '…' : name;
+  const amt  = row['金額（税込）']
+    ? '¥' + Number(String(row['金額（税込）']).replace(/,/g,'')).toLocaleString()
+    : '';
+  const sub  = [row['発注者'], amt].filter(Boolean).join('　');
+
+  h += `<text x="12" y="${y+18}" fill="#222" font-size="12" font-family="Meiryo"
+          font-weight="500" data-idx="${i}" class="row-label">${esc(nameShort)}</text>`;
+  h += `<text x="12" y="${y+33}" fill="#888" font-size="10" font-family="Meiryo"
+          >${esc(sub.slice(0,28))}</text>`;
+
+  // 担当バッジ
+  const tantou = row['主担当'] || '';
+  const bx = L.INFO_W - 62;
+  h += `<rect x="${bx}" y="${y+14}" width="52" height="20" rx="10"
+          fill="${col}" opacity="0.18"/>`;
+  h += `<text x="${bx+26}" y="${y+28}" text-anchor="middle"
+          fill="${col}" font-size="11" font-family="Meiryo" font-weight="bold"
+          data-idx="${i}" class="row-label">${esc(tantou)}</text>`;
+
+  // ── スケジュールバー ──
+  const validDates = MILESTONES
+    .map(m => row.dates[m.col])
+    .filter(d => d !== null);
+
+  if (validDates.length >= 2) {
+    const dMin = new Date(Math.min(...validDates));
+    const dMax = new Date(Math.max(...validDates));
+    const x1 = Math.max(toX(dMin, origin), L.INFO_W + L.PAD_L);
+    const x2 = Math.min(toX(dMax, origin), L.INFO_W + L.PAD_L + chartW);
+    if (x2 > x1) {
+      const by = y + L.ROW_H/2 - L.BAR_H/2;
+      h += `<rect x="${x1}" y="${by}" width="${x2-x1}" height="${L.BAR_H}"
+              rx="4" fill="${col}" opacity="0.25" data-idx="${i}" class="row-bar"/>`;
+    }
+  }
+
+  // ── マイルストーン ──
+  MILESTONES.forEach(m => {
+    const d = row.dates[m.col];
+    if (!d) return;
+    const mx = toX(d, origin);
+    if (mx < L.INFO_W + L.PAD_L || mx > L.INFO_W + L.PAD_L + chartW) return;
+    const my = y + L.ROW_H / 2;
+
+    if (m.shape === 'triangle') {
+      // ▶ 公募開始
+      const s = L.MS_SIZE + 1;
+      h += `<polygon points="${mx},${my-s} ${mx+s*1.2},${my} ${mx},${my+s}"
+              fill="${col}" opacity="0.9" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
+    } else if (m.shape === 'star') {
+      // ★ プレゼン
+      h += `<text x="${mx}" y="${my+5}" text-anchor="middle"
+              fill="${col}" font-size="15" font-family="serif"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms">★</text>`;
+    } else {
+      // ◆ 各締切
+      const s = L.MS_SIZE;
+      h += `<polygon points="${mx},${my-s} ${mx+s},${my} ${mx},${my+s} ${mx-s},${my}"
+              fill="${col}" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
+    }
+
+    // 日付ラベル
+    h += `<text x="${mx}" y="${y+L.ROW_H-4}" text-anchor="middle"
+            fill="${col}" font-size="9" font-family="Meiryo" opacity="0.85">${fmtMD(d)}</text>`;
+  });
+
+  return h;
+}
+
+// ────────────────────────────────────────────────────────────
+// ツールチップ
+function attachTooltips() {
+  const svg = document.getElementById('ganttSvg');
+  const tip = document.getElementById('tooltip');
+
+  svg.addEventListener('mousemove', e => {
+    const el = e.target;
+    const idx = el.getAttribute('data-idx');
+    if (idx === null) { tip.style.display = 'none'; return; }
+
+    const row = rows[parseInt(idx)];
+    if (!row) return;
+
+    const msCol = el.getAttribute('data-ms');
+    const phase = row['フェーズ'] || '情報収集中';
+    const col   = (PHASES[phase] || PHASES['情報収集中']).color;
+
+    let html = `<strong>${row['案件名'] || ''}</strong>`;
+    html += `<div class="tt-row"><span class="tt-label">発注者</span><span>${row['発注者']||'-'}</span></div>`;
+    html += `<div class="tt-row"><span class="tt-label">主担当</span><span>${row['主担当']||'-'}</span></div>`;
+    html += `<div class="tt-row"><span class="tt-label">フェーズ</span><span style="color:${col};font-weight:bold">${phase}</span></div>`;
+
+    if (msCol) {
+      const dt = el.getAttribute('data-dt');
+      html += `<div class="tt-row" style="margin-top:4px;border-top:1px solid #555;padding-top:4px">
+                 <span class="tt-label">${msCol}</span><span style="font-weight:bold">${dt}</span></div>`;
+    } else {
+      const schedule = MILESTONES.filter(m => row.dates[m.col]);
+      if (schedule.length) {
+        html += `<div style="margin-top:4px;border-top:1px solid #555;padding-top:4px">`;
+        schedule.forEach(m => {
+          html += `<div class="tt-row"><span class="tt-label">${m.col}</span><span>${fmtFull(row.dates[m.col])}</span></div>`;
+        });
+        html += `</div>`;
+      }
+    }
+
+    tip.innerHTML = html;
+    tip.style.display = 'block';
+
+    // 画面端に収まるよう調整
+    const tw = 300, th = tip.offsetHeight;
+    let tx = e.clientX + 14, ty = e.clientY - 20;
+    if (tx + tw > window.innerWidth)  tx = e.clientX - tw - 14;
+    if (ty + th > window.innerHeight) ty = e.clientY - th - 10;
+    tip.style.left = tx + 'px';
+    tip.style.top  = ty + 'px';
+  });
+
+  svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+// ────────────────────────────────────────────────────────────
+// 凡例
+function drawLegend() {
+  const bar = document.getElementById('legendBar');
+  let h = '';
+  Object.entries(PHASES).forEach(([name, pc]) => {
+    h += `<div class="legend-item">
+            <div class="legend-swatch" style="background:${pc.color}"></div>
+            <span>${name}</span>
+          </div>`;
+  });
+  h += `<span class="legend-sep">｜</span>`;
+  h += `<div class="legend-item">▶ 公募開始</div>`;
+  h += `<div class="legend-item">◆ 締切・提出</div>`;
+  h += `<div class="legend-item">★ プレゼン</div>`;
+  h += `<span class="legend-sep">｜</span>`;
+  h += `<div class="legend-item" style="color:#E53935">─ 今日</div>`;
+  bar.innerHTML = h;
+}
+
+// SVGエスケープ
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// ────────────────────────────────────────────────────────────
+// 初期化
+window.addEventListener('DOMContentLoaded', () => {
+  // デフォルト表示期間（今月頭 〜 3ヶ月後）
+  const now = new Date();
+  const s = new Date(now.getFullYear(), now.getMonth(), 1);
+  const e = new Date(now.getFullYear(), now.getMonth() + 4, 0);
+  document.getElementById('startDate').value = s.toISOString().split('T')[0];
+  document.getElementById('endDate').value   = e.toISOString().split('T')[0];
+
+  drawLegend();
+
+  if (SHEET_CSV_URL !== 'YOUR_GOOGLE_SHEETS_CSV_URL') {
+    reload();
+  } else {
+    // サンプルデータで表示
+    loadSample();
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// サンプルデータ（URLが未設定のとき）
+function loadSample() {
+  rows = [
+    { '企画番号':'31681', '案件名':'第３次尾道市環境基本計画策定業務',           '発注者':'尾道市',       '金額（税込）':7500000, 'フェーズ':'企画提案中',
+      dates:{ '公募開始':null, '質問締切':new Date('2026-04-17'), '参加表明':new Date('2026-04-28'), '企画提出':new Date('2026-05-08'), 'プレゼン':new Date('2026-05-18') }},
+    { '企画番号':'31599', '案件名':'J-クレジット制度推進事業',                   '発注者':'中国経済産業局','金額（税込）':8000000, 'フェーズ':'情報収集中', '主担当':'山田',
+      dates:{ '公募開始':new Date('2026-04-17'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
+    { '企画番号':'31670', '案件名':'再エネ促進・自治体連携調査事業',              '発注者':'中国経済産業局','金額（税込）':8000000, 'フェーズ':'情報収集中', '主担当':'山田',
+      dates:{ '公募開始':new Date('2026-04-30'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
+    { '企画番号':'31597', '案件名':'安来市エネ高事業支援業務',                   '発注者':'安来市',       '金額（税込）':10000000,'フェーズ':'情報収集中', '主担当':'山田',
+      dates:{ '公募開始':new Date('2026-05-15'), '質問締切':null, '参加表明':null, '企画提出':new Date('2026-06-20'), 'プレゼン':null }},
+    { '企画番号':'31562', '案件名':'島根県再エネセミナー',                       '発注者':'島根県',       '金額（税込）':2400000, 'フェーズ':'情報収集中', '主担当':'山田',
+      dates:{ '公募開始':new Date('2026-04-20'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
+    { '企画番号':'31678', '案件名':'溝口移住定住住宅団地整備PFI導入可能性調査',  '発注者':'伯耆町',       '金額（税込）':4950000, 'フェーズ':'企画提案中',     '主担当':'小山',
+      dates:{ '公募開始':null, '質問締切':new Date('2026-04-16'), '参加表明':new Date('2026-04-27'), '企画提出':new Date('2026-05-08'), 'プレゼン':new Date('2026-05-15') }},
+    { '企画番号':'31662', '案件名':'第10期津山市高齢者保健福祉計画策定支援業務', '発注者':'津山市',       '金額（税込）':4961000, 'フェーズ':'提案中',     '主担当':'勝部',
+      dates:{ '公募開始':null, '質問締切':new Date('2026-03-19'), '参加表明':new Date('2026-04-08'), '企画提出':new Date('2026-04-30'), 'プレゼン':new Date('2026-05-14') }},
+    { '企画番号':'31659', '案件名':'百姓塾｜観光庁・環境整備事業（調査）',       '発注者':'観光庁',       '金額（税込）':5500000, 'フェーズ':'企画提案中',     '主担当':'守山',
+      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-04-22'), 'プレゼン':null }},
+    { '企画番号':'31663', '案件名':'天平古道｜観光庁・環境整備事業（調査）',     '発注者':'観光庁',       '金額（税込）':5500000, 'フェーズ':'企画提案中',     '主担当':'守山',
+      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-04-22'), 'プレゼン':null }},
+    { '企画番号':'211',   '案件名':'デジタル化・AI導入補助金2026',               '発注者':'中小企業庁',   '金額（税込）':1500000, 'フェーズ':'情報収集中', '主担当':'守山',
+      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-05-12'), 'プレゼン':null }},
+  ];
+  document.getElementById('statusMsg').textContent = 'サンプルデータ表示中（URLを設定すると実データに切替わります）';
+  render();
+}
+</script>
+</body>
+</html>
