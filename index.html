@@ -166,8 +166,8 @@ const PHASES = {
 // マイルストーン定義（列名 → 表示ラベル・形状）
 const MILESTONES = [
   { col: '公募開始', label: '公募', shape: 'triangle' },
-  { col: '質問締切', label: '質問', shape: 'diamond'  },
-  { col: '参加表明', label: '参加', shape: 'diamond'  },
+  { col: '質問締切', label: '質問', shape: 'circle'   },
+  { col: '参加表明', label: '参加', shape: 'circle'   },
   { col: '企画提出', label: '提出', shape: 'diamond'  },
   { col: 'プレゼン',  label: 'PL',   shape: 'star'    },
 ];
@@ -439,15 +439,22 @@ function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
       h += `<text x="${mx}" y="${my+5}" text-anchor="middle"
               fill="#FF9800" font-size="17" font-family="serif"
               data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms">★</text>`;
+    } else if (m.shape === 'circle') {
+      // ● 質問締切・参加表明（青・小さめ）
+      h += `<circle cx="${mx}" cy="${my}" r="5"
+              fill="#2196F3" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
     } else {
-      // ◆ 各締切（赤・やや大きめ）
+      // ◆ 企画提出（赤・やや大きめ）
       const s = L.MS_SIZE + 2;
       h += `<polygon points="${mx},${my-s} ${mx+s},${my} ${mx},${my+s} ${mx-s},${my}"
               fill="#E53935" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
     }
 
-    // 日付ラベル（diamondは赤、starはオレンジ、triangleはフェーズカラー）
-    const lblCol = m.shape === 'diamond' ? '#E53935' : m.shape === 'star' ? '#FF9800' : col;
+    // 日付ラベル（shape別に色分け）
+    const lblCol = m.shape === 'diamond' ? '#E53935'
+                 : m.shape === 'star'    ? '#FF9800'
+                 : m.shape === 'circle'  ? '#2196F3'
+                 : col;
     h += `<text x="${mx}" y="${y+L.ROW_H-4}" text-anchor="middle"
             fill="${lblCol}" font-size="9" font-family="Meiryo" opacity="0.85">${fmtMD(d)}</text>`;
   });
@@ -521,7 +528,8 @@ function drawLegend() {
   });
   h += `<span class="legend-sep">｜</span>`;
   h += `<div class="legend-item">▶ 公募開始</div>`;
-  h += `<div class="legend-item" style="color:#E53935">◆ 締切・提出</div>`;
+  h += `<div class="legend-item" style="color:#2196F3">● 質問締切・参加表明</div>`;
+  h += `<div class="legend-item" style="color:#E53935">◆ 企画提出</div>`;
   h += `<div class="legend-item" style="color:#FF9800">★ プレゼン</div>`;
   h += `<span class="legend-sep">｜</span>`;
   h += `<div class="legend-item" style="color:#E53935">─ 今日</div>`;
