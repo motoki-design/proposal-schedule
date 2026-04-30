@@ -42,9 +42,10 @@
       flex-wrap: wrap;
     }
     .controls label { font-size: 12px; color: #555; white-space: nowrap; }
-    .controls input[type="date"] {
+    .controls input[type="date"], .controls select {
       font-size: 12px; padding: 4px 8px;
       border: 1px solid #CCC; border-radius: 4px;
+      background: #fff;
     }
     .btn {
       padding: 5px 14px;
@@ -63,7 +64,7 @@
       padding: 8px 24px;
       display: flex;
       align-items: center;
-      gap: 20px;
+      gap: 18px;
       flex-wrap: wrap;
     }
     .legend-item {
@@ -113,7 +114,7 @@
     }
     .tooltip strong { font-size: 13px; display: block; margin-bottom: 4px; }
     .tooltip .tt-row { display: flex; gap: 8px; }
-    .tooltip .tt-label { color: #AAB; min-width: 72px; }
+    .tooltip .tt-label { color: #AAB; min-width: 86px; }
   </style>
 </head>
 <body>
@@ -122,7 +123,7 @@
   <h1>プロポーザル スケジュール管理</h1>
   <div class="header-right">
     <div id="lastUpdated"></div>
-    <div>エブリプラン 事業創発室</div>
+    <div>エブリプラン 事業創発室　v2</div>
   </div>
 </div>
 
@@ -131,7 +132,21 @@
   <input type="date" id="startDate">
   <span style="font-size:12px;color:#888">〜</span>
   <input type="date" id="endDate">
+  <span style="color:#CCC">｜</span>
+  <label>並び替え：</label>
+  <select id="sortMode">
+    <option value="dept_no">部署 → 案件番号</option>
+    <option value="dept_date">部署 → 直近日程</option>
+    <option value="phase_date">フェーズ → 直近日程</option>
+    <option value="no">案件番号</option>
+    <option value="date">直近日程</option>
+  </select>
   <button class="btn" onclick="reload()">↺ 更新</button>
+  <span style="color:#CCC">｜</span>
+  <label style="cursor:pointer" title="手元のCSVファイルを読み込む（CORS回避用）">
+    <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none">
+    <span class="btn" style="background:#5C6BC0">📂 CSV読込</span>
+  </label>
   <span class="status-msg" id="statusMsg"></span>
 </div>
 
@@ -151,11 +166,11 @@
 // ║  設定（ここだけ変更すればOK）                              ║
 // ╚══════════════════════════════════════════════════════════╝
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQTxwDVTFScfj8SLaF8Qcy2U6_lT9PdiQchTwO6jeiiFuXRrgNrpZOKRxDaYvuAXuadTN2aM-03c-OY/pub?gid=0&single=true&output=csv';
-//  ↑ GoogleスプレッドシートのCSV公開URLをここに貼り付ける
 
 // ────────────────────────────────────────────────────────────
-// フェーズ定義
+// フェーズ定義（v2: 営業中を追加）
 const PHASES = {
+  '営業中':       { color: '#7E57C2', light: '#EDE7F6' },
   '情報収集中':   { color: '#9E9E9E', light: '#F5F5F5' },
   '企画提案中':   { color: '#2196F3', light: '#E3F2FD' },
   '提出済・審査中': { color: '#FF9800', light: '#FFF3E0' },
@@ -163,42 +178,76 @@ const PHASES = {
   '完了（不受注）':{ color: '#EF9A9A', light: '#FFEBEE' },
 };
 
-// マイルストーン定義（列名 → 表示ラベル・形状）
+// 部署略称（スプレッドシート側で短縮表記を採用：建コン／地域共創／事業創発／未定）
+// 互換のため正式名称も短縮名にマッピングする
+const DEPT_SHORT = {
+  '建コン': '建コン',
+  '地域共創': '地域共創',
+  '事業創発': '事業創発',
+  '未定': '未定',
+  '建設コンサルティング事業部': '建コン',
+  '地域共創部': '地域共創',
+  '事業創発室': '事業創発',
+};
+
+// 部署の並び順（並び替え「部署→…」で使用）
+const DEPT_ORDER = ['建コン', '地域共創', '事業創発', '未定'];
+
+// マイルストーン定義（v2: 早期2種を追加）
+// ※ スプレッドシートのカラム名に合わせる
 const MILESTONES = [
-  { col: '公募開始', label: '公募', shape: 'triangle' },
-  { col: '質問締切', label: '質問', shape: 'circle'   },
-  { col: '参加表明', label: '参加', shape: 'circle'   },
-  { col: '企画提出', label: '提出', shape: 'diamond'  },
-  { col: 'プレゼン',  label: 'PL',   shape: 'star'    },
+  { col: '次回問い合わせ予定', label: '問合', shape: 'diamondOutline', color: '#7E57C2' },
+  { col: '予算化見込み',       label: '予算', shape: 'doubleCircle',   color: '#5E35B2' },
+  { col: '公募開始',       label: '公募', shape: 'triangle',       color: null     }, // null=フェーズ色
+  { col: '質問締切',       label: '質問', shape: 'circle',         color: '#2196F3' },
+  { col: '参加表明',       label: '参加', shape: 'circle',         color: '#2196F3' },
+  { col: '企画提出',       label: '提出', shape: 'diamond',        color: '#E53935' },
+  { col: 'プレゼン',       label: 'PL',   shape: 'star',           color: '#FF9800' },
 ];
 
 // レイアウト定数
 const L = {
-  INFO_W:   300,   // 左情報パネル幅
-  PAD_L:    12,    // チャートエリア左パディング
-  PAD_R:    24,    // チャートエリア右パディング
-  ROW_H:    52,    // 1行の高さ
-  HEAD_H:   44,    // ヘッダー行高さ
-  PPD:      16,    // pixels per day（1日あたりのピクセル数）
-  BAR_H:    14,    // バーの高さ
-  MS_SIZE:  7,     // マイルストーンサイズ
+  INFO_W:   320,
+  PAD_L:    12,
+  PAD_R:    24,
+  ROW_H:    52,
+  HEAD_H:   44,
+  PPD:      16,
+  BAR_H:    14,
+  MS_SIZE:  7,
+  DEPT_SEP_H: 22,  // 部署セパレーターの高さ
 };
 
 // ────────────────────────────────────────────────────────────
 let rows = [];
 
-// 日付パース
+// 日付パース（v2: YYYY/M 形式の月単位を許容）
+// 戻り値：{ date: Date, vague: boolean } または null
 function pd(v) {
-  if (!v || v === '') return null;
-  const d = new Date(v);
-  return isNaN(d) ? null : d;
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // YYYY/M または YYYY-M（日省略）→ 月初として「曖昧扱い」
+  const m1 = s.match(/^(\d{4})[\/\-](\d{1,2})$/);
+  if (m1) {
+    const d = new Date(parseInt(m1[1]), parseInt(m1[2]) - 1, 1);
+    return isNaN(d) ? null : { date: d, vague: true };
+  }
+
+  const d = new Date(s);
+  return isNaN(d) ? null : { date: d, vague: false };
 }
 
-function fmtMD(d) {
-  return d ? `${d.getMonth()+1}/${d.getDate()}` : '';
+function fmtMD(p) {
+  if (!p) return '';
+  if (p.vague) return `${p.date.getMonth()+1}月頃`;
+  return `${p.date.getMonth()+1}/${p.date.getDate()}`;
 }
-function fmtFull(d) {
-  return d ? `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}` : '';
+function fmtFull(p) {
+  if (!p) return '';
+  if (p.vague) return `${p.date.getFullYear()}年${p.date.getMonth()+1}月頃`;
+  return `${p.date.getFullYear()}/${p.date.getMonth()+1}/${p.date.getDate()}`;
 }
 
 // X座標計算
@@ -209,39 +258,122 @@ function toX(date, origin) {
 // ────────────────────────────────────────────────────────────
 // データ読み込み
 async function loadSheet() {
-  return new Promise((resolve, reject) => {
-    Papa.parse(SHEET_CSV_URL, {
-      download: true,
-      header: true,
-      skipEmptyLines: true,
-      complete: r => resolve(r.data),
-      error: reject,
+  // file:// で開くケースがあるため、PapaParse の download:true ではなく
+  // fetch でテキスト取得 → Papa.parse(text) に分離（CORS/リダイレクト耐性UP）
+  const res = await fetch(SHEET_CSV_URL, { redirect: 'follow', cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  const text = await res.text();
+  const r = Papa.parse(text, { header: true, skipEmptyLines: true });
+  if (r.errors && r.errors.length) console.warn('[CSV parse warnings]', r.errors);
+  if (!r.data || r.data.length === 0) throw new Error('CSVが空でした');
+  return r.data;
+}
+
+function processData(data, sourceLabel) {
+  const msg = document.getElementById('statusMsg');
+  console.log('[processData] 取得列:', Object.keys(data[0] || {}));
+  console.log('[processData] 1行目サンプル:', data[0]);
+
+  rows = data
+    .filter(r => r['案件名'] && r['案件名'].trim())
+    .map(r => {
+      const dates = {};
+      MILESTONES.forEach(m => { dates[m.col] = pd(r[m.col]); });
+      return { ...r, dates };
     });
-  });
+
+  document.getElementById('lastUpdated').textContent =
+    `最終更新：${new Date().toLocaleString('ja-JP', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
+  msg.style.color = '';
+  msg.textContent = `${rows.length} 件 / ${sourceLabel || 'スプレッドシート'}`;
+  render();
 }
 
 async function reload() {
   const msg = document.getElementById('statusMsg');
+  msg.style.color = '';
   msg.textContent = '読み込み中…';
+
+  // file:// で開かれている場合は CORS で必ず失敗するので、ガイドを出す
+  if (location.protocol === 'file:') {
+    msg.textContent = 'CORSのため file:// から外部読込は不可。📂 CSV読込か、ローカルサーバー経由で開いてください';
+    msg.style.color = '#E53935';
+    console.warn('Open via http://localhost or GitHub Pages, or use 📂 CSV読込');
+    return;
+  }
 
   try {
     const data = await loadSheet();
-    rows = data
-      .filter(r => r['案件名'] && r['案件名'].trim())
-      .map(r => {
-        const dates = {};
-        MILESTONES.forEach(m => { dates[m.col] = pd(r[m.col]); });
-        return { ...r, dates };
-      });
-
-    document.getElementById('lastUpdated').textContent =
-      `最終更新：${new Date().toLocaleString('ja-JP', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
-    msg.textContent = `${rows.length} 件`;
-    render();
+    processData(data, 'スプレッドシート');
   } catch (e) {
-    msg.textContent = 'エラー：データを読み込めませんでした';
-    console.error(e);
+    msg.textContent = `エラー：${e && e.message ? e.message : 'データを読み込めませんでした'}`;
+    msg.style.color = '#E53935';
+    console.error('[reload] error:', e);
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// 並び替え
+function sortRows(arr) {
+  const mode = document.getElementById('sortMode').value;
+  const phaseOrder = Object.keys(PHASES);
+
+  const earliest = (r) => {
+    const ds = MILESTONES.map(m => r.dates[m.col]).filter(Boolean).map(p => p.date);
+    return ds.length ? Math.min(...ds) : Infinity;
+  };
+  const noKey = (r) => {
+    const n = parseInt(r['企画番号']);
+    return isNaN(n) ? Number.MAX_SAFE_INTEGER : n;
+  };
+  const deptKey = (r) => {
+    const raw = (r['部署'] || '').trim();
+    const d = DEPT_SHORT[raw] || raw;
+    const i = DEPT_ORDER.indexOf(d);
+    return i === -1 ? 99 : i;
+  };
+  const phaseKey = (r) => {
+    const p = (r['フェーズ'] || '').trim();
+    const i = phaseOrder.indexOf(p);
+    return i === -1 ? 99 : i;
+  };
+
+  const cmp = (a, b, fns) => {
+    for (const f of fns) { const v = f(a) - f(b); if (v !== 0) return v; }
+    return 0;
+  };
+
+  const sorted = [...arr];
+  if (mode === 'dept_no')      sorted.sort((a,b) => cmp(a,b,[deptKey, noKey]));
+  else if (mode === 'dept_date') sorted.sort((a,b) => cmp(a,b,[deptKey, earliest]));
+  else if (mode === 'phase_date') sorted.sort((a,b) => cmp(a,b,[phaseKey, earliest]));
+  else if (mode === 'no')      sorted.sort((a,b) => cmp(a,b,[noKey]));
+  else if (mode === 'date')    sorted.sort((a,b) => cmp(a,b,[earliest]));
+  return sorted;
+}
+
+// 部署区切りの行インデックスと高さ計算
+// 戻り：{ items: [{type:'sep', dept, y}|{type:'row', row, y}], totalH }
+function buildLayout(sorted) {
+  const mode = document.getElementById('sortMode').value;
+  const showDeptSep = (mode === 'dept_no' || mode === 'dept_date');
+  const items = [];
+  let y = L.HEAD_H;
+  let curDept = null;
+
+  sorted.forEach(r => {
+    const raw = (r['部署'] || '').trim();
+    const dept = DEPT_SHORT[raw] || raw || '（未設定）';
+    if (showDeptSep && dept !== curDept) {
+      items.push({ type: 'sep', dept, y });
+      y += L.DEPT_SEP_H;
+      curDept = dept;
+    }
+    items.push({ type: 'row', row: r, y });
+    y += L.ROW_H;
+  });
+
+  return { items, totalH: y + 8 };
 }
 
 // ────────────────────────────────────────────────────────────
@@ -266,7 +398,7 @@ function render() {
 
   if (!origin || !end) {
     const all = [];
-    rows.forEach(r => Object.values(r.dates).forEach(d => { if (d) all.push(d); }));
+    rows.forEach(r => Object.values(r.dates).forEach(p => { if (p) all.push(p.date); }));
     if (all.length === 0) return;
     if (!origin) { origin = new Date(Math.min(...all)); origin.setDate(origin.getDate() - 7); }
     if (!end)    { end    = new Date(Math.max(...all)); end.setDate(end.getDate() + 30);    }
@@ -275,7 +407,10 @@ function render() {
   const totalDays = (end - origin) / 86400000;
   const chartW    = Math.ceil(totalDays * L.PPD);
   const totalW    = L.INFO_W + L.PAD_L + chartW + L.PAD_R;
-  const totalH    = L.HEAD_H + rows.length * L.ROW_H + 8;
+
+  const sorted = sortRows(rows);
+  const layout = buildLayout(sorted);
+  const totalH = layout.totalH;
 
   svg.setAttribute('width',   totalW);
   svg.setAttribute('height',  totalH);
@@ -290,8 +425,14 @@ function render() {
   h += drawGrid(origin, end, totalDays, chartW, totalH, totalW);
 
   // 行
-  rows.forEach((row, i) => {
-    h += drawRow(row, i, origin, end, totalDays, chartW, totalW);
+  let rowIdx = 0;
+  layout.items.forEach(it => {
+    if (it.type === 'sep') {
+      h += drawDeptSeparator(it, totalW);
+    } else {
+      h += drawRow(it.row, rowIdx, it.y, origin, end, totalDays, chartW, totalW);
+      rowIdx++;
+    }
   });
 
   // 今日線
@@ -310,8 +451,20 @@ function render() {
 
   svg.innerHTML = h;
 
-  attachTooltips();
+  attachTooltips(layout);
   drawLegend();
+}
+
+// ────────────────────────────────────────────────────────────
+// 部署セパレーター
+function drawDeptSeparator(it, totalW) {
+  let h = '';
+  h += `<rect x="0" y="${it.y}" width="${totalW}" height="${L.DEPT_SEP_H}" fill="#EEF1F8"/>`;
+  h += `<line x1="0" y1="${it.y}" x2="${totalW}" y2="${it.y}"
+          stroke="#9FA8DA" stroke-width="1"/>`;
+  h += `<text x="12" y="${it.y + L.DEPT_SEP_H/2 + 4}"
+          fill="#1A237E" font-size="11" font-family="Meiryo" font-weight="bold">${esc(it.dept)}</text>`;
+  return h;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -337,9 +490,8 @@ function drawGrid(origin, end, totalDays, chartW, totalH, totalW) {
     cur.setMonth(cur.getMonth() + 1);
   }
 
-  // 週グリッド + 日付ラベル
+  // 週グリッド
   const wk = new Date(origin);
-  // 直近の月曜に揃える
   const dow = wk.getDay();
   wk.setDate(wk.getDate() + (dow === 1 ? 0 : dow === 0 ? 1 : 8 - dow));
   while (wk <= end) {
@@ -348,7 +500,7 @@ function drawGrid(origin, end, totalDays, chartW, totalH, totalW) {
       h += `<line x1="${x}" y1="${L.HEAD_H}" x2="${x}" y2="${totalH}"
               stroke="#E8EAF6" stroke-width="1"/>`;
       h += `<text x="${x+2}" y="${L.HEAD_H-5}"
-              fill="#9FA8DA" font-size="9" font-family="Meiryo">${fmtMD(wk)}</text>`;
+              fill="#9FA8DA" font-size="9" font-family="Meiryo">${wk.getMonth()+1}/${wk.getDate()}</text>`;
     }
     wk.setDate(wk.getDate() + 7);
   }
@@ -364,9 +516,8 @@ function drawGrid(origin, end, totalDays, chartW, totalH, totalW) {
 
 // ────────────────────────────────────────────────────────────
 // 1行分の描画
-function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
+function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
   let h = '';
-  const y    = L.HEAD_H + i * L.ROW_H;
   const phase = row['フェーズ'] || '情報収集中';
   const pc   = (PHASES[phase] || PHASES['情報収集中']);
   const col  = pc.color;
@@ -384,16 +535,19 @@ function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
 
   // ── 左情報パネル ──
   const name = row['案件名'] || '';
-  const nameShort = name.length > 20 ? name.slice(0, 20) + '…' : name;
+  const nameShort = name.length > 22 ? name.slice(0, 22) + '…' : name;
   const amt  = row['金額（税込）']
     ? '¥' + Number(String(row['金額（税込）']).replace(/,/g,'')).toLocaleString()
     : '';
-  const sub  = [row['発注者'], amt].filter(Boolean).join('　');
+  const deptRaw = (row['部署'] || '').trim();
+  const deptShort = DEPT_SHORT[deptRaw] || deptRaw;
+  const subParts = [row['発注者'], amt, deptShort ? `[${deptShort}]` : ''].filter(Boolean);
+  const sub  = subParts.join('　');
 
   h += `<text x="12" y="${y+18}" fill="#222" font-size="12" font-family="Meiryo"
           font-weight="500" data-idx="${i}" class="row-label">${esc(nameShort)}</text>`;
   h += `<text x="12" y="${y+33}" fill="#888" font-size="10" font-family="Meiryo"
-          >${esc(sub.slice(0,28))}</text>`;
+          >${esc(sub.slice(0,32))}</text>`;
 
   // 担当バッジ
   const tantou = row['主担当'] || '';
@@ -404,14 +558,16 @@ function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
           fill="${col}" font-size="11" font-family="Meiryo" font-weight="bold"
           data-idx="${i}" class="row-label">${esc(tantou)}</text>`;
 
-  // ── スケジュールバー ──
-  const validDates = MILESTONES
-    .map(m => row.dates[m.col])
-    .filter(d => d !== null);
+  // ── スケジュールバー（公募開始以降の確定マイルストーンのみで判定） ──
+  const formalCols = ['公募開始','質問締切','参加表明','企画提出','プレゼン'];
+  const formalDates = formalCols
+    .map(c => row.dates[c])
+    .filter(p => p !== null)
+    .map(p => p.date);
 
-  if (validDates.length >= 2) {
-    const dMin = new Date(Math.min(...validDates));
-    const dMax = new Date(Math.max(...validDates));
+  if (formalDates.length >= 2) {
+    const dMin = new Date(Math.min(...formalDates));
+    const dMax = new Date(Math.max(...formalDates));
     const x1 = Math.max(toX(dMin, origin), L.INFO_W + L.PAD_L);
     const x2 = Math.min(toX(dMax, origin), L.INFO_W + L.PAD_L + chartW);
     if (x2 > x1) {
@@ -423,40 +579,46 @@ function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
 
   // ── マイルストーン ──
   MILESTONES.forEach(m => {
-    const d = row.dates[m.col];
-    if (!d) return;
-    const mx = toX(d, origin);
+    const p = row.dates[m.col];
+    if (!p) return;
+    const mx = toX(p.date, origin);
     if (mx < L.INFO_W + L.PAD_L || mx > L.INFO_W + L.PAD_L + chartW) return;
     const my = y + L.ROW_H / 2;
+    const msColor = m.color || col;
 
     if (m.shape === 'triangle') {
-      // ▶ 公募開始（フェーズカラーのまま）
       const s = L.MS_SIZE + 1;
       h += `<polygon points="${mx},${my-s} ${mx+s*1.2},${my} ${mx},${my+s}"
-              fill="${col}" opacity="0.9" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
+              fill="${msColor}" opacity="0.9" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
     } else if (m.shape === 'star') {
-      // ★ プレゼン（オレンジ固定）
       h += `<text x="${mx}" y="${my+5}" text-anchor="middle"
-              fill="#FF9800" font-size="17" font-family="serif"
-              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms">★</text>`;
+              fill="${msColor}" font-size="17" font-family="serif"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms">★</text>`;
     } else if (m.shape === 'circle') {
-      // ● 質問締切・参加表明（青・小さめ）
       h += `<circle cx="${mx}" cy="${my}" r="5"
-              fill="#2196F3" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
+              fill="${msColor}" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
+    } else if (m.shape === 'doubleCircle') {
+      // ◎ 二重丸
+      h += `<circle cx="${mx}" cy="${my}" r="6.5" fill="none" stroke="${msColor}" stroke-width="1.6"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
+      h += `<circle cx="${mx}" cy="${my}" r="3" fill="${msColor}"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
+    } else if (m.shape === 'diamondOutline') {
+      // ◇ 中空菱形
+      const s = L.MS_SIZE + 1;
+      h += `<polygon points="${mx},${my-s} ${mx+s},${my} ${mx},${my+s} ${mx-s},${my}"
+              fill="#fff" stroke="${msColor}" stroke-width="1.6"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
     } else {
-      // ◆ 企画提出（赤・やや大きめ）
+      // ◆ 企画提出
       const s = L.MS_SIZE + 2;
       h += `<polygon points="${mx},${my-s} ${mx+s},${my} ${mx},${my+s} ${mx-s},${my}"
-              fill="#E53935" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(d)}" class="ms"/>`;
+              fill="${msColor}" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
     }
 
-    // 日付ラベル（shape別に色分け）
-    const lblCol = m.shape === 'diamond' ? '#E53935'
-                 : m.shape === 'star'    ? '#FF9800'
-                 : m.shape === 'circle'  ? '#2196F3'
-                 : col;
+    // 日付ラベル
     h += `<text x="${mx}" y="${y+L.ROW_H-4}" text-anchor="middle"
-            fill="${lblCol}" font-size="9" font-family="Meiryo" opacity="0.85">${fmtMD(d)}</text>`;
+            fill="${msColor}" font-size="9" font-family="Meiryo" opacity="0.9">${fmtMD(p)}</text>`;
   });
 
   return h;
@@ -464,37 +626,42 @@ function drawRow(row, i, origin, end, totalDays, chartW, totalW) {
 
 // ────────────────────────────────────────────────────────────
 // ツールチップ
-function attachTooltips() {
+function attachTooltips(layout) {
   const svg = document.getElementById('ganttSvg');
   const tip = document.getElementById('tooltip');
+
+  // idx → row のマップを作る（行はrowIdx順）
+  const idxToRow = [];
+  layout.items.forEach(it => { if (it.type === 'row') idxToRow.push(it.row); });
 
   svg.addEventListener('mousemove', e => {
     const el = e.target;
     const idx = el.getAttribute('data-idx');
     if (idx === null) { tip.style.display = 'none'; return; }
 
-    const row = rows[parseInt(idx)];
+    const row = idxToRow[parseInt(idx)];
     if (!row) return;
 
     const msCol = el.getAttribute('data-ms');
     const phase = row['フェーズ'] || '情報収集中';
     const col   = (PHASES[phase] || PHASES['情報収集中']).color;
 
-    let html = `<strong>${row['案件名'] || ''}</strong>`;
-    html += `<div class="tt-row"><span class="tt-label">発注者</span><span>${row['発注者']||'-'}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">主担当</span><span>${row['主担当']||'-'}</span></div>`;
-    html += `<div class="tt-row"><span class="tt-label">フェーズ</span><span style="color:${col};font-weight:bold">${phase}</span></div>`;
+    let html = `<strong>${esc(row['案件名'] || '')}</strong>`;
+    html += `<div class="tt-row"><span class="tt-label">発注者</span><span>${esc(row['発注者']||'-')}</span></div>`;
+    if (row['部署']) html += `<div class="tt-row"><span class="tt-label">部署</span><span>${esc(row['部署'])}</span></div>`;
+    html += `<div class="tt-row"><span class="tt-label">主担当</span><span>${esc(row['主担当']||'-')}</span></div>`;
+    html += `<div class="tt-row"><span class="tt-label">フェーズ</span><span style="color:${col};font-weight:bold">${esc(phase)}</span></div>`;
 
     if (msCol) {
       const dt = el.getAttribute('data-dt');
       html += `<div class="tt-row" style="margin-top:4px;border-top:1px solid #555;padding-top:4px">
-                 <span class="tt-label">${msCol}</span><span style="font-weight:bold">${dt}</span></div>`;
+                 <span class="tt-label">${esc(msCol)}</span><span style="font-weight:bold">${esc(dt)}</span></div>`;
     } else {
       const schedule = MILESTONES.filter(m => row.dates[m.col]);
       if (schedule.length) {
         html += `<div style="margin-top:4px;border-top:1px solid #555;padding-top:4px">`;
         schedule.forEach(m => {
-          html += `<div class="tt-row"><span class="tt-label">${m.col}</span><span>${fmtFull(row.dates[m.col])}</span></div>`;
+          html += `<div class="tt-row"><span class="tt-label">${esc(m.col)}</span><span>${fmtFull(row.dates[m.col])}</span></div>`;
         });
         html += `</div>`;
       }
@@ -503,8 +670,7 @@ function attachTooltips() {
     tip.innerHTML = html;
     tip.style.display = 'block';
 
-    // 画面端に収まるよう調整
-    const tw = 300, th = tip.offsetHeight;
+    const tw = 320, th = tip.offsetHeight;
     let tx = e.clientX + 14, ty = e.clientY - 20;
     if (tx + tw > window.innerWidth)  tx = e.clientX - tw - 14;
     if (ty + th > window.innerHeight) ty = e.clientY - th - 10;
@@ -527,6 +693,8 @@ function drawLegend() {
           </div>`;
   });
   h += `<span class="legend-sep">｜</span>`;
+  h += `<div class="legend-item" style="color:#7E57C2">◇ 次回問合せ予定</div>`;
+  h += `<div class="legend-item" style="color:#5E35B2">◎ 予算化見込み</div>`;
   h += `<div class="legend-item">▶ 公募開始</div>`;
   h += `<div class="legend-item" style="color:#2196F3">● 質問締切・参加表明</div>`;
   h += `<div class="legend-item" style="color:#E53935">◆ 企画提出</div>`;
@@ -548,49 +716,59 @@ function esc(s) {
 // ────────────────────────────────────────────────────────────
 // 初期化
 window.addEventListener('DOMContentLoaded', () => {
-  // デフォルト表示期間（今月頭 〜 3ヶ月後）
   const now = new Date();
   const s = new Date(now.getFullYear(), now.getMonth(), 1);
   const e = new Date(now.getFullYear(), now.getMonth() + 4, 0);
   document.getElementById('startDate').value = s.toISOString().split('T')[0];
   document.getElementById('endDate').value   = e.toISOString().split('T')[0];
 
+  document.getElementById('sortMode').addEventListener('change', () => {
+    if (rows.length) render();
+  });
+
+  // ローカルCSV読み込み（CORS回避用フォールバック）
+  document.getElementById('csvFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result;
+      const r = Papa.parse(text, { header: true, skipEmptyLines: true });
+      processData(r.data, `${file.name}（ローカル読込）`);
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+
   drawLegend();
 
-  if (SHEET_CSV_URL !== 'YOUR_GOOGLE_SHEETS_CSV_URL') {
+  if (SHEET_CSV_URL && !SHEET_CSV_URL.includes('YOUR_')) {
     reload();
   } else {
-    // サンプルデータで表示
     loadSample();
   }
 });
 
 // ────────────────────────────────────────────────────────────
-// サンプルデータ（URLが未設定のとき）
+// サンプルデータ
 function loadSample() {
+  const mk = (obj) => {
+    const dates = {};
+    MILESTONES.forEach(m => { dates[m.col] = obj[m.col] ? pd(obj[m.col]) : null; });
+    return { ...obj, dates };
+  };
   rows = [
-    { '企画番号':'31681', '案件名':'第３次尾道市環境基本計画策定業務',           '発注者':'尾道市',       '金額（税込）':7500000, 'フェーズ':'企画提案中',
-      dates:{ '公募開始':null, '質問締切':new Date('2026-04-17'), '参加表明':new Date('2026-04-28'), '企画提出':new Date('2026-05-08'), 'プレゼン':new Date('2026-05-18') }},
-    { '企画番号':'31599', '案件名':'J-クレジット制度推進事業',                   '発注者':'中国経済産業局','金額（税込）':8000000, 'フェーズ':'情報収集中', '主担当':'山田',
-      dates:{ '公募開始':new Date('2026-04-17'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
-    { '企画番号':'31670', '案件名':'再エネ促進・自治体連携調査事業',              '発注者':'中国経済産業局','金額（税込）':8000000, 'フェーズ':'情報収集中', '主担当':'山田',
-      dates:{ '公募開始':new Date('2026-04-30'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
-    { '企画番号':'31597', '案件名':'安来市エネ高事業支援業務',                   '発注者':'安来市',       '金額（税込）':10000000,'フェーズ':'情報収集中', '主担当':'山田',
-      dates:{ '公募開始':new Date('2026-05-15'), '質問締切':null, '参加表明':null, '企画提出':new Date('2026-06-20'), 'プレゼン':null }},
-    { '企画番号':'31562', '案件名':'島根県再エネセミナー',                       '発注者':'島根県',       '金額（税込）':2400000, 'フェーズ':'情報収集中', '主担当':'山田',
-      dates:{ '公募開始':new Date('2026-04-20'), '質問締切':null, '参加表明':null, '企画提出':null, 'プレゼン':null }},
-    { '企画番号':'31678', '案件名':'溝口移住定住住宅団地整備PFI導入可能性調査',  '発注者':'伯耆町',       '金額（税込）':4950000, 'フェーズ':'企画提案中',     '主担当':'小山',
-      dates:{ '公募開始':null, '質問締切':new Date('2026-04-16'), '参加表明':new Date('2026-04-27'), '企画提出':new Date('2026-05-08'), 'プレゼン':new Date('2026-05-15') }},
-    { '企画番号':'31662', '案件名':'第10期津山市高齢者保健福祉計画策定支援業務', '発注者':'津山市',       '金額（税込）':4961000, 'フェーズ':'提出済・審査中', '主担当':'勝部',
-      dates:{ '公募開始':null, '質問締切':new Date('2026-03-19'), '参加表明':new Date('2026-04-08'), '企画提出':new Date('2026-04-30'), 'プレゼン':new Date('2026-05-14') }},
-    { '企画番号':'31659', '案件名':'百姓塾｜観光庁・環境整備事業（調査）',       '発注者':'観光庁',       '金額（税込）':5500000, 'フェーズ':'企画提案中',     '主担当':'守山',
-      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-04-22'), 'プレゼン':null }},
-    { '企画番号':'31663', '案件名':'天平古道｜観光庁・環境整備事業（調査）',     '発注者':'観光庁',       '金額（税込）':5500000, 'フェーズ':'企画提案中',     '主担当':'守山',
-      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-04-22'), 'プレゼン':null }},
-    { '企画番号':'211',   '案件名':'デジタル化・AI導入補助金2026',               '発注者':'中小企業庁',   '金額（税込）':1500000, 'フェーズ':'情報収集中', '主担当':'守山',
-      dates:{ '公募開始':null, '質問締切':null, '参加表明':null, '企画提出':new Date('2026-05-12'), 'プレゼン':null }},
+    mk({ '企画番号':'31681','案件名':'第３次尾道市環境基本計画策定業務','発注者':'尾道市','金額（税込）':7500000,'部署':'建コン','フェーズ':'企画提案中','主担当':'未定',
+        '質問締切':'2026-04-17','参加表明':'2026-04-28','企画提出':'2026-05-08','プレゼン':'2026-05-18' }),
+    mk({ '企画番号':'31599','案件名':'J-クレジット制度推進事業','発注者':'中国経済産業局','金額（税込）':7495000,'部署':'地域共創','フェーズ':'情報収集中','主担当':'山田',
+        '公募開始':'2026-04-17','企画提出':'2026-05-18' }),
+    mk({ '企画番号':'31662','案件名':'第10期津山市高齢者保健福祉計画策定支援業務','発注者':'津山市','金額（税込）':4961000,'部署':'事業創発','フェーズ':'提出済・審査中','主担当':'勝部',
+        '質問締切':'2026-03-19','参加表明':'2026-04-08','企画提出':'2026-04-30','プレゼン':'2026-05-14' }),
+    mk({ '企画番号':'32501','案件名':'A市B計画','発注者':'A','金額（税込）':5500000,'部署':'建コン','フェーズ':'営業中','主担当':'未定',
+        '次回問い合わせ予定':'2026/6','予算化見込み':'2026/9' }),
+    mk({ '企画番号':'32502','案件名':'C市D計画','発注者':'B','金額（税込）':3000000,'部署':'地域共創','フェーズ':'営業中','主担当':'未定',
+        '次回問い合わせ予定':'2026/7' }),
   ];
-  document.getElementById('statusMsg').textContent = 'サンプルデータ表示中（URLを設定すると実データに切替わります）';
+  document.getElementById('statusMsg').textContent = `サンプルデータ表示中（${rows.length}件）`;
   render();
 }
 </script>
