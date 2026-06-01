@@ -123,7 +123,7 @@
   <h1>プロポーザル スケジュール管理</h1>
   <div class="header-right">
     <div id="lastUpdated"></div>
-    <div>エブリプラン 事業創発室　v2</div>
+    <div>エブリプラン 事業創発室　v3</div>
   </div>
 </div>
 
@@ -141,6 +141,9 @@
     <option value="no">案件番号</option>
     <option value="date">直近日程</option>
   </select>
+  <span style="color:#CCC">｜</span>
+  <button class="btn" id="toggleCompleted" style="background:#5C6BC0" onclick="toggleCompleted()"
+    title="完了（受注・不受注）の案件を表示/非表示で切り替える">完了を非表示</button>
   <button class="btn" onclick="reload()">↺ 更新</button>
   <span style="color:#CCC">｜</span>
   <label style="cursor:pointer" title="手元のCSVファイルを読み込む（CORS回避用）">
@@ -178,6 +181,9 @@ const PHASES = {
   '完了（不受注）':{ color: '#EF9A9A', light: '#FFEBEE' },
 };
 
+// 完了フェーズ（v3: フィルタ対象）
+const COMPLETED_PHASES = ['完了（受注）', '完了（不受注）'];
+
 // 部署略称（スプレッドシート側で短縮表記を採用：建コン／地域共創／事業創発／未定）
 // 互換のため正式名称も短縮名にマッピングする
 const DEPT_SHORT = {
@@ -193,14 +199,14 @@ const DEPT_SHORT = {
 // 部署の並び順（並び替え「部署→…」で使用）
 const DEPT_ORDER = ['建コン', '地域共創', '事業創発', '未定'];
 
-// マイルストーン定義（v2: 早期2種を追加）
+// マイルストーン定義（v2: 早期2種を追加 / v3: 参加表明を○中空円で区別）
 // ※ スプレッドシートのカラム名に合わせる
 const MILESTONES = [
   { col: '次回問い合わせ予定', label: '問合', shape: 'diamondOutline', color: '#7E57C2' },
   { col: '予算化見込み',       label: '予算', shape: 'doubleCircle',   color: '#5E35B2' },
   { col: '公募開始',       label: '公募', shape: 'triangle',       color: null     }, // null=フェーズ色
   { col: '質問締切',       label: '質問', shape: 'circle',         color: '#2196F3' },
-  { col: '参加表明',       label: '参加', shape: 'circle',         color: '#2196F3' },
+  { col: '参加表明',       label: '参加', shape: 'circleOutline',  color: '#2196F3' }, // v3: ○中空円で区別
   { col: '企画提出',       label: '提出', shape: 'diamond',        color: '#E53935' },
   { col: 'プレゼン',       label: 'PL',   shape: 'star',           color: '#FF9800' },
 ];
@@ -220,6 +226,16 @@ const L = {
 
 // ────────────────────────────────────────────────────────────
 let rows = [];
+let hideCompleted = false;  // v3: 完了非表示フィルタの状態（初期=全件表示）
+
+// 完了非表示トグル
+function toggleCompleted() {
+  hideCompleted = !hideCompleted;
+  const b = document.getElementById('toggleCompleted');
+  b.textContent  = hideCompleted ? '完了を表示' : '完了を非表示';
+  b.style.background = hideCompleted ? '#43A047' : '#5C6BC0';
+  if (rows.length) render();
+}
 
 // 日付パース（v2: YYYY/M 形式の月単位を許容）
 // 戻り値：{ date: Date, vague: boolean } または null
@@ -382,9 +398,25 @@ function render() {
   const svg = document.getElementById('ganttSvg');
   const empty = document.getElementById('emptyState');
 
-  if (rows.length === 0) {
+  // v3: 完了非表示フィルタを適用した作業用配列
+  const visibleRows = hideCompleted
+    ? rows.filter(r => !COMPLETED_PHASES.includes((r['フェーズ'] || '').trim()))
+    : rows;
+
+  // ステータス件数表示（フィルタ時は「表示N件 / 全M件」）
+  const msg = document.getElementById('statusMsg');
+  if (rows.length && hideCompleted) {
+    const hidden = rows.length - visibleRows.length;
+    msg.style.color = '';
+    msg.textContent = `表示 ${visibleRows.length} 件（完了 ${hidden} 件を非表示 / 全 ${rows.length} 件）`;
+  }
+
+  if (visibleRows.length === 0) {
     svg.style.display = 'none';
     empty.style.display = 'block';
+    empty.textContent = (rows.length && hideCompleted)
+      ? '表示できる案件がありません（すべて完了案件のため非表示中）。'
+      : 'データがありません。スプレッドシートのURLを設定してください。';
     return;
   }
   svg.style.display = 'block';
@@ -398,7 +430,7 @@ function render() {
 
   if (!origin || !end) {
     const all = [];
-    rows.forEach(r => Object.values(r.dates).forEach(p => { if (p) all.push(p.date); }));
+    visibleRows.forEach(r => Object.values(r.dates).forEach(p => { if (p) all.push(p.date); }));
     if (all.length === 0) return;
     if (!origin) { origin = new Date(Math.min(...all)); origin.setDate(origin.getDate() - 7); }
     if (!end)    { end    = new Date(Math.max(...all)); end.setDate(end.getDate() + 30);    }
@@ -408,7 +440,7 @@ function render() {
   const chartW    = Math.ceil(totalDays * L.PPD);
   const totalW    = L.INFO_W + L.PAD_L + chartW + L.PAD_R;
 
-  const sorted = sortRows(rows);
+  const sorted = sortRows(visibleRows);
   const layout = buildLayout(sorted);
   const totalH = layout.totalH;
 
@@ -597,6 +629,10 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
     } else if (m.shape === 'circle') {
       h += `<circle cx="${mx}" cy="${my}" r="5"
               fill="${msColor}" data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
+    } else if (m.shape === 'circleOutline') {
+      // ○ 中空円（v3: 参加表明）
+      h += `<circle cx="${mx}" cy="${my}" r="5" fill="#fff" stroke="${msColor}" stroke-width="1.8"
+              data-idx="${i}" data-ms="${m.col}" data-dt="${fmtFull(p)}" class="ms"/>`;
     } else if (m.shape === 'doubleCircle') {
       // ◎ 二重丸
       h += `<circle cx="${mx}" cy="${my}" r="6.5" fill="none" stroke="${msColor}" stroke-width="1.6"
@@ -696,7 +732,8 @@ function drawLegend() {
   h += `<div class="legend-item" style="color:#7E57C2">◇ 次回問合せ予定</div>`;
   h += `<div class="legend-item" style="color:#5E35B2">◎ 予算化見込み</div>`;
   h += `<div class="legend-item">▶ 公募開始</div>`;
-  h += `<div class="legend-item" style="color:#2196F3">● 質問締切・参加表明</div>`;
+  h += `<div class="legend-item" style="color:#2196F3">● 質問締切</div>`;
+  h += `<div class="legend-item" style="color:#2196F3">○ 参加表明</div>`;
   h += `<div class="legend-item" style="color:#E53935">◆ 企画提出</div>`;
   h += `<div class="legend-item" style="color:#FF9800">★ プレゼン</div>`;
   h += `<span class="legend-sep">｜</span>`;
@@ -767,6 +804,10 @@ function loadSample() {
         '次回問い合わせ予定':'2026/6','予算化見込み':'2026/9' }),
     mk({ '企画番号':'32502','案件名':'C市D計画','発注者':'B','金額（税込）':3000000,'部署':'地域共創','フェーズ':'営業中','主担当':'未定',
         '次回問い合わせ予定':'2026/7' }),
+    mk({ '企画番号':'31501','案件名':'E市文化施設整備基本計画','発注者':'E市','金額（税込）':6800000,'部署':'建コン','フェーズ':'完了（受注）','主担当':'安藤',
+        '質問締切':'2026-02-10','参加表明':'2026-02-20','企画提出':'2026-03-02','プレゼン':'2026-03-12' }),
+    mk({ '企画番号':'31502','案件名':'F町総合計画策定支援','発注者':'F町','金額（税込）':4200000,'部署':'地域共創','フェーズ':'完了（不受注）','主担当':'鶴見',
+        '質問締切':'2026-02-15','参加表明':'2026-02-25','企画提出':'2026-03-05','プレゼン':'2026-03-15' }),
   ];
   document.getElementById('statusMsg').textContent = `サンプルデータ表示中（${rows.length}件）`;
   render();
