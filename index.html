@@ -30,6 +30,15 @@
     }
     .header h1 { font-size: 16px; font-weight: bold; letter-spacing: 0.05em; }
     .header-right { font-size: 11px; opacity: 0.75; text-align: right; line-height: 1.6; }
+    .sheet-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #2E7D32; color: #fff; text-decoration: none;
+      font-size: 12px; font-weight: bold; white-space: nowrap;
+      padding: 6px 16px; border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+      transition: background 0.15s;
+    }
+    .sheet-link:hover { background: #388E3C; }
 
     /* ── コントロールバー ── */
     .controls {
@@ -121,6 +130,8 @@
 
 <div class="header">
   <h1>プロポーザル スケジュール管理</h1>
+  <a class="sheet-link" href="https://docs.google.com/spreadsheets/d/11Ht9UBIZMzoMxNdyfEEmCFu7PvS-sUnvWFOs7d-SnYo/edit" target="_blank" rel="noopener"
+     title="案件データのスプレッドシートを新しいタブで開いて編集する">📝 スプレッドシートを編集</a>
   <div class="header-right">
     <div id="lastUpdated"></div>
     <div>エブリプラン 事業創発室　v3</div>
@@ -184,12 +195,13 @@ const PHASES = {
 // 完了フェーズ（v3: フィルタ対象）
 const COMPLETED_PHASES = ['完了（受注）', '完了（不受注）'];
 
-// 部署略称（スプレッドシート側で短縮表記を採用：建コン／地域共創／事業創発／未定）
+// 部署略称（スプレッドシート側で短縮表記を採用：建コン／地域共創／事業創発／中国支社／未定）
 // 互換のため正式名称も短縮名にマッピングする
 const DEPT_SHORT = {
   '建コン': '建コン',
   '地域共創': '地域共創',
   '事業創発': '事業創発',
+  '中国支社': '中国支社',
   '未定': '未定',
   '建設コンサルティング事業部': '建コン',
   '地域共創部': '地域共創',
@@ -197,7 +209,7 @@ const DEPT_SHORT = {
 };
 
 // 部署の並び順（並び替え「部署→…」で使用）
-const DEPT_ORDER = ['建コン', '地域共創', '事業創発', '未定'];
+const DEPT_ORDER = ['建コン', '地域共創', '事業創発', '中国支社', '未定'];
 
 // マイルストーン定義（v2: 早期2種を追加 / v3: 参加表明を○中空円で区別）
 // ※ スプレッドシートのカラム名に合わせる
@@ -573,12 +585,18 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
     : '';
   const deptRaw = (row['部署'] || '').trim();
   const deptShort = DEPT_SHORT[deptRaw] || deptRaw;
+  const planNo = (row['企画番号'] || '').toString().trim();
   const subParts = [row['発注者'], amt, deptShort ? `[${deptShort}]` : ''].filter(Boolean);
   const sub  = subParts.join('　');
 
-  h += `<text x="12" y="${y+18}" fill="#222" font-size="12" font-family="Meiryo"
+  // 企画番号（左パネル上部・案件名の前に薄く表示）
+  if (planNo) {
+    h += `<text x="12" y="${y+13}" fill="#3949AB" font-size="10" font-family="Meiryo"
+            font-weight="bold" data-idx="${i}" class="row-label">No.${esc(planNo)}</text>`;
+  }
+  h += `<text x="12" y="${y+27}" fill="#222" font-size="12" font-family="Meiryo"
           font-weight="500" data-idx="${i}" class="row-label">${esc(nameShort)}</text>`;
-  h += `<text x="12" y="${y+33}" fill="#888" font-size="10" font-family="Meiryo"
+  h += `<text x="12" y="${y+39}" fill="#888" font-size="10" font-family="Meiryo"
           >${esc(sub.slice(0,32))}</text>`;
 
   // 担当バッジ
@@ -683,6 +701,7 @@ function attachTooltips(layout) {
     const col   = (PHASES[phase] || PHASES['情報収集中']).color;
 
     let html = `<strong>${esc(row['案件名'] || '')}</strong>`;
+    if (row['企画番号']) html += `<div class="tt-row"><span class="tt-label">企画番号</span><span>${esc(String(row['企画番号']))}</span></div>`;
     html += `<div class="tt-row"><span class="tt-label">発注者</span><span>${esc(row['発注者']||'-')}</span></div>`;
     if (row['部署']) html += `<div class="tt-row"><span class="tt-label">部署</span><span>${esc(row['部署'])}</span></div>`;
     html += `<div class="tt-row"><span class="tt-label">主担当</span><span>${esc(row['主担当']||'-')}</span></div>`;
