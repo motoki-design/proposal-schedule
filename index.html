@@ -154,7 +154,7 @@
   </select>
   <span style="color:#CCC">｜</span>
   <button class="btn" id="toggleCompleted" style="background:#5C6BC0" onclick="toggleCompleted()"
-    title="完了（受注・不受注）の案件を表示/非表示で切り替える">完了を非表示</button>
+    title="完了（受注・不受注）・参加見送り・辞退の案件を表示/非表示で切り替える">完了を非表示</button>
   <button class="btn" onclick="reload()">↺ 更新</button>
   <span style="color:#CCC">｜</span>
   <label style="cursor:pointer" title="手元のCSVファイルを読み込む（CORS回避用）">
@@ -190,10 +190,12 @@ const PHASES = {
   '提出済・審査中': { color: '#FF9800', light: '#FFF3E0' },
   '完了（受注）': { color: '#4CAF50', light: '#E8F5E9' },
   '完了（不受注）':{ color: '#EF9A9A', light: '#FFEBEE' },
+  '参加見送り':   { color: '#90A4AE', light: '#ECEFF1' },
+  '辞退':         { color: '#A1887F', light: '#EFEBE9' },
 };
 
-// 完了フェーズ（v3: フィルタ対象）
-const COMPLETED_PHASES = ['完了（受注）', '完了（不受注）'];
+// クローズ扱いフェーズ（v3: 完了非表示フィルタの対象。v3.1: 参加見送り・辞退を追加）
+const COMPLETED_PHASES = ['完了（受注）', '完了（不受注）', '参加見送り', '辞退'];
 
 // 部署略称（スプレッドシート側で短縮表記を採用：建コン／地域共創／事業創発／中国支社／未定）
 // 互換のため正式名称も短縮名にマッピングする
@@ -420,14 +422,14 @@ function render() {
   if (rows.length && hideCompleted) {
     const hidden = rows.length - visibleRows.length;
     msg.style.color = '';
-    msg.textContent = `表示 ${visibleRows.length} 件（完了 ${hidden} 件を非表示 / 全 ${rows.length} 件）`;
+    msg.textContent = `表示 ${visibleRows.length} 件（完了・見送り・辞退 ${hidden} 件を非表示 / 全 ${rows.length} 件）`;
   }
 
   if (visibleRows.length === 0) {
     svg.style.display = 'none';
     empty.style.display = 'block';
     empty.textContent = (rows.length && hideCompleted)
-      ? '表示できる案件がありません（すべて完了案件のため非表示中）。'
+      ? '表示できる案件がありません（すべて完了・見送り・辞退のため非表示中）。'
       : 'データがありません。スプレッドシートのURLを設定してください。';
     return;
   }
