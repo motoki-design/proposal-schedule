@@ -362,6 +362,12 @@ function sortRows(arr) {
     const i = DEPT_ORDER.indexOf(d);
     return i === -1 ? 99 : i;
   };
+  // 部署が未定の案件は、どの並び順でも最優先で先頭に固定する
+  const deptTBDKey = (r) => {
+    const raw = (r['部署'] || '').trim();
+    const d = DEPT_SHORT[raw] || raw;
+    return d === '未定' ? 0 : 1;
+  };
   const phaseKey = (r) => {
     const p = (r['フェーズ'] || '').trim();
     const i = phaseOrder.indexOf(p);
@@ -374,11 +380,11 @@ function sortRows(arr) {
   };
 
   const sorted = [...arr];
-  if (mode === 'dept_no')      sorted.sort((a,b) => cmp(a,b,[deptKey, noKey]));
-  else if (mode === 'dept_date') sorted.sort((a,b) => cmp(a,b,[deptKey, earliest]));
-  else if (mode === 'phase_date') sorted.sort((a,b) => cmp(a,b,[phaseKey, earliest]));
-  else if (mode === 'no')      sorted.sort((a,b) => cmp(a,b,[noKey]));
-  else if (mode === 'date')    sorted.sort((a,b) => cmp(a,b,[earliest]));
+  if (mode === 'dept_no')      sorted.sort((a,b) => cmp(a,b,[deptTBDKey, deptKey, noKey]));
+  else if (mode === 'dept_date') sorted.sort((a,b) => cmp(a,b,[deptTBDKey, deptKey, earliest]));
+  else if (mode === 'phase_date') sorted.sort((a,b) => cmp(a,b,[deptTBDKey, phaseKey, earliest]));
+  else if (mode === 'no')      sorted.sort((a,b) => cmp(a,b,[deptTBDKey, noKey]));
+  else if (mode === 'date')    sorted.sort((a,b) => cmp(a,b,[deptTBDKey, earliest]));
   return sorted;
 }
 
@@ -610,14 +616,23 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
      + `<tspan fill="${isDeptTBD ? '#E65100' : '#888'}" font-weight="${isDeptTBD ? 'bold' : 'normal'}">${esc(deptTag)}</tspan>`
      + `</text>`;
 
-  // 担当バッジ
-  const tantou = row['主担当'] || '';
+  // 担当バッジ（主担当が空または「未定」のときはオレンジで強調）
+  const tantou = (row['主担当'] || '').trim();
+  const isTantouTBD = (tantou === '' || tantou === '未定');
   const bx = L.INFO_W - 62;
-  h += `<rect x="${bx}" y="${y+14}" width="52" height="20" rx="10"
-          fill="${col}" opacity="0.18"/>`;
-  h += `<text x="${bx+26}" y="${y+28}" text-anchor="middle"
-          fill="${col}" font-size="11" font-family="Meiryo" font-weight="bold"
-          data-idx="${i}" class="row-label">${esc(tantou)}</text>`;
+  if (isTantouTBD) {
+    h += `<rect x="${bx}" y="${y+14}" width="52" height="20" rx="10"
+            fill="#FFE0B2" stroke="#E65100" stroke-width="1"/>`;
+    h += `<text x="${bx+26}" y="${y+28}" text-anchor="middle"
+            fill="#E65100" font-size="11" font-family="Meiryo" font-weight="bold"
+            data-idx="${i}" class="row-label">未定</text>`;
+  } else {
+    h += `<rect x="${bx}" y="${y+14}" width="52" height="20" rx="10"
+            fill="${col}" opacity="0.18"/>`;
+    h += `<text x="${bx+26}" y="${y+28}" text-anchor="middle"
+            fill="${col}" font-size="11" font-family="Meiryo" font-weight="bold"
+            data-idx="${i}" class="row-label">${esc(tantou)}</text>`;
+  }
 
   // ── スケジュールバー（公募開始以降の確定マイルストーンのみで判定） ──
   const formalCols = ['公募開始','質問締切','参加表明','企画提出','プレゼン'];
