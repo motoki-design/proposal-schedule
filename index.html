@@ -568,8 +568,15 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
   const pc   = (PHASES[phase] || PHASES['情報収集中']);
   const col  = pc.color;
 
-  // 交互背景
-  if (i % 2 === 1) {
+  // 部署（未定の強調表示に使用）
+  const deptRaw = (row['部署'] || '').trim();
+  const deptShort = DEPT_SHORT[deptRaw] || deptRaw;
+  const isDeptTBD = (deptShort === '未定');
+
+  // 行背景（未定はアンバーで強調／それ以外は交互背景）
+  if (isDeptTBD) {
+    h += `<rect x="0" y="${y}" width="${totalW}" height="${L.ROW_H}" fill="#FFF8E1"/>`;
+  } else if (i % 2 === 1) {
     h += `<rect x="0" y="${y}" width="${totalW}" height="${L.ROW_H}" fill="#FAFBFF"/>`;
   }
   // 下線
@@ -585,11 +592,11 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
   const amt  = row['金額（税込）']
     ? '¥' + Number(String(row['金額（税込）']).replace(/,/g,'')).toLocaleString()
     : '';
-  const deptRaw = (row['部署'] || '').trim();
-  const deptShort = DEPT_SHORT[deptRaw] || deptRaw;
   const planNo = (row['企画番号'] || '').toString().trim();
-  const subParts = [row['発注者'], amt, deptShort ? `[${deptShort}]` : ''].filter(Boolean);
-  const sub  = subParts.join('　');
+  // 発注者・金額（部署タグは色分けのため別tspanで描画）
+  const baseSub = [row['発注者'], amt].filter(Boolean).join('　');
+  const baseShown = baseSub.length > 24 ? baseSub.slice(0, 24) + '…' : baseSub;
+  const deptTag = deptShort ? (isDeptTBD ? `⚠[${deptShort}]` : `[${deptShort}]`) : '';
 
   // 企画番号（左パネル上部・案件名の前に薄く表示）
   if (planNo) {
@@ -598,8 +605,10 @@ function drawRow(row, i, y, origin, end, totalDays, chartW, totalW) {
   }
   h += `<text x="12" y="${y+27}" fill="#222" font-size="12" font-family="Meiryo"
           font-weight="500" data-idx="${i}" class="row-label">${esc(nameShort)}</text>`;
-  h += `<text x="12" y="${y+39}" fill="#888" font-size="10" font-family="Meiryo"
-          >${esc(sub.slice(0,32))}</text>`;
+  h += `<text x="12" y="${y+39}" font-size="10" font-family="Meiryo">`
+     + `<tspan fill="#888">${esc(baseShown)}${deptTag ? '　' : ''}</tspan>`
+     + `<tspan fill="${isDeptTBD ? '#E65100' : '#888'}" font-weight="${isDeptTBD ? 'bold' : 'normal'}">${esc(deptTag)}</tspan>`
+     + `</text>`;
 
   // 担当バッジ
   const tantou = row['主担当'] || '';
